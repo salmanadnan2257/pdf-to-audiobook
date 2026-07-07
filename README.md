@@ -107,6 +107,15 @@ python3 converter.py path/to/file.pdf -o path/to/output_folder -l en
   fix (a clear error message on connection failure) would go beyond the
   batching change already made to `convert_pdf_to_tts`.
 
+- **A `\\` line break inside a bare TikZ node broke the deep-dive PDF's
+  build.** While diagramming the `main.py` → `converter.py` call in
+  `docs/explainers/deep-dive.pdf`, a sequence-diagram node label used
+  `{calls\\convert\_pdf\_to\_audio()}` without an `align=center` option,
+  which `pdflatex` rejected with "Something's wrong--perhaps a missing
+  \item" because a manual line break needs a multi-line text mode to land
+  in. Resolution: added `align=center` to that node's options, which is
+  also what every other multi-line node in the diagram already used.
+
 ## What I learned
 
 - Splitting GUI event handlers from the underlying work makes headless
