@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+venv/
+.venv/
+node_modules/
+dist/
+build/
+*.egg-info/
+.coverage
+htmlcov/
+.DS_Store
+*.log
+.env
+
+# Generated audiobooks are written next to the source PDF the user picks
+# (outside this repo in normal use), but ignore the output folder pattern
+# defensively in case a PDF ever lives inside the project during testing.
+tts_pdf/
+*.mp3
