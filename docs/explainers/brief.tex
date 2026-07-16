@@ -1,0 +1,316 @@
+% explainer-source-hash: b65b60844a1e7b4a31378d5babc61291bbf8e105f40563de0308ddc7fe8ea1c6
+% explainer-source-commit: b928cee68d8afd7dd077c24be1c4b2e0256110a9
+% explainer-generated: 2026-07-16
+% Regenerate with /explain-all (see WIRING.md). Do not edit this stamp by hand:
+% it is how the toolchain knows whether this document still matches the code.
+\documentclass[11pt,a4paper]{article}
+\input{preamble}
+
+\title{\textbf{PDF to Audiobook}\\[0.3em]\large A Brief}
+\author{Portfolio explainer}
+\date{}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+\section{The project in one page}
+
+\begin{keyidea}{What it is}
+A small desktop application, about 578 lines of Python in two files, that extracts the
+text from PDF files and converts it into mp3 audiobooks. It handles a batch of files at
+once, lets you preview the extracted text and restrict conversion to a page range,
+offers a choice of language and regional accent, reports honest progress while it works,
+and can play the result. It also runs entirely from the command line with no screen.
+\end{keyidea}
+
+The interesting thing about this project is not the feature list. It is that a hobby-scale
+utility makes several decisions that larger codebases routinely get wrong, and that its
+README is candid about the ones it did not solve.
+
+\subsection{The three constraints that shaped it}
+
+\begin{enumerate}
+  \item \textbf{Speech synthesis happens on Google's servers.} The gTTS library is a thin
+        client for Google Translate's speech endpoint. So the tool needs an internet
+        connection, has no offline mode, is subject to rate limits, and has no volume
+        control because the library offers none. No API key is needed;
+        \file{.env.example} is deliberately empty and says so.
+  \item \textbf{A PDF is not necessarily text.} A scanned PDF is a picture of a page.
+        This project does no OCR, so such a document yields nothing.
+  \item \textbf{A graphical interface freezes while your code runs.} Any slow work done
+        directly in a button handler locks the window. Conversion is slow by nature. This
+        single fact dictates the architecture of the GUI file.
+\end{enumerate}
+
+\section{Architecture}
+
+The project is split in two, and the dependency points one way only.
+
+\begin{figure}[H]
+\centering
+\resizebox{0.92\textwidth}{!}{
+\begin{tikzpicture}[node distance=9mm]
+  \node[box, minimum width=36mm] (gui) {\textbf{main.py} (360 lines)\\Tkinter GUI: batch queue,\\preview, options, progress};
+  \node[box, minimum width=36mm, below=20mm of gui] (conv) {\textbf{converter.py} (218 lines)\\extraction, synthesis,\\playback, argparse CLI};
+  \node[extbox, minimum width=26mm, left=20mm of conv] (cli) {Command line};
+  \node[extbox, minimum width=20mm, below=18mm of conv] (gtts) {gTTS};
+  \node[extbox, minimum width=20mm, left=12mm of gtts] (pypdf) {PyPDF2};
+  \node[extbox, minimum width=24mm, right=12mm of gtts] (play) {ffplay / mpv /\\afplay / aplay};
+  \node[store, minimum width=18mm, below=14mm of gtts] (goo) {Google TTS\\endpoint};
+  \node[store, left=12mm of pypdf] (pdf) {PDF};
+  \node[store, below=14mm of play] (mp3) {mp3};
+
+  \draw[flow] (gui) -- node[lbl, right]{plain function calls;\\no GUI state crosses down} (conv);
+  \draw[flow] (cli) -- (conv);
+  \draw[flow] (conv) -- (pypdf);
+  \draw[flow] (conv) -- (gtts);
+  \draw[flow] (conv) -- (play);
+  \draw[flow] (pypdf) -- (pdf);
+  \draw[flow] (gtts) -- node[lbl, above]{HTTPS} (goo);
+  \draw[flow] (play) -- (mp3);
+\end{tikzpicture}}
+\caption{\file{converter.py} never imports Tkinter and never touches a widget. That is
+what makes both the command line entry point and headless verification possible.}
+\end{figure}
+
+\begin{keyidea}{Why the split is the load-bearing decision}
+Because the logic module has no GUI dependency, it can be run and checked without a
+screen. The README records that an earlier version was a single file mixing widgets and
+conversion, and that separating them was a deliberate fix. Everything verified in
+Section~\ref{sec:ver} of this document was verified by calling those functions directly,
+which would have been impossible in the original design.
+\end{keyidea}
+
+\section{The two ideas worth understanding}
+
+\subsection{Per-page synthesis is what makes progress real}
+
+The obvious implementation sends the whole document to gTTS in one request. That request
+is a black box: it takes a minute and reports nothing, so any progress bar drawn around
+it is an animation on a timer, not information.
+
+This project synthesizes \textbf{one page per request} instead. The code regains control
+between pages, and that is where it calls an optional \code{progress\_callback(done,
+total)}. The GUI turns that into ``Converting page 7/20''; the CLI prints \code{Page
+7/20}; a script can pass nothing at all. The progress is truthful because the boundaries
+are real. The cost, accepted deliberately, is more requests and more chances to hit a
+rate limit.
+
+\subsection{Joining the pages: raw mp3 concatenation}
+
+Per-page synthesis leaves one mp3 fragment per page that must become one file. The code
+keeps a single file handle open and writes each fragment's bytes into it, one after
+another.
+
+\begin{figure}[H]
+\centering
+\resizebox{0.9\textwidth}{!}{
+\begin{tikzpicture}
+  \node[box, minimum width=14mm, fill=accent!12] (a1) {frame};
+  \node[box, minimum width=14mm, right=1mm of a1, fill=accent!12] (a2) {frame};
+  \node[box, minimum width=14mm, right=6mm of a2, fill=okgreen!12] (b1) {frame};
+  \node[box, minimum width=14mm, right=1mm of b1, fill=okgreen!12] (b2) {frame};
+  \node[box, minimum width=14mm, right=6mm of b2, fill=warnred!10] (c1) {frame};
+  \node[box, minimum width=14mm, right=1mm of c1, fill=warnred!10] (c2) {frame};
+  \draw[decorate, decoration={brace, amplitude=4pt}, draw=accent]
+    ([yshift=3mm]a1.north west) -- ([yshift=3mm]a2.north east) node[midway, above=3pt, lbl]{page 1};
+  \draw[decorate, decoration={brace, amplitude=4pt}, draw=okgreen]
+    ([yshift=3mm]b1.north west) -- ([yshift=3mm]b2.north east) node[midway, above=3pt, lbl]{page 2};
+  \draw[decorate, decoration={brace, amplitude=4pt}, draw=warnred]
+    ([yshift=3mm]c1.north west) -- ([yshift=3mm]c2.north east) node[midway, above=3pt, lbl]{page 3};
+  \draw[decorate, decoration={brace, mirror, amplitude=5pt}, draw=inkblue]
+    ([yshift=-3mm]a1.south west) -- ([yshift=-3mm]c2.south east)
+    node[midway, below=5pt, lbl]{one file; a decoder reads frames left to right and never sees the joins};
+\end{tikzpicture}}
+\caption{An mp3 is a chain of self-describing frames, so gluing streams together works.}
+\end{figure}
+
+This would destroy most formats: concatenating two PNG files produces corruption, not a
+taller image, because a PNG has one header for the whole picture. An mp3 is a stream of
+independent frames, each with its own header, so a decoder simply carries on. The README
+is honest that this leans on a property of the format rather than a documented guarantee,
+and that a ``proper'' fix would add a dependency to perform the same byte copy with more
+ceremony. It was checked here and it holds (Section~\ref{sec:ver}).
+
+\section{How the interface stays responsive}
+
+Tkinter has a hard rule: \textbf{widgets may only be touched from the thread that created
+them}. So conversion cannot run on the main thread (the window would freeze) and cannot
+update the widgets from the worker thread (undefined behaviour). The project resolves this
+with the standard three-part pattern.
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{
+\begin{tikzpicture}
+  \node[box, minimum width=28mm] (ui) at (0,0) {Main thread\\(Tk event loop)};
+  \node[store, minimum width=22mm] (q) at (5.6,0) {\code{queue.Queue}};
+  \node[box, minimum width=28mm] (w) at (11.2,0) {Worker thread};
+  \node[extbox, minimum width=22mm] (c) at (16.4,0) {gTTS};
+  \draw[dashed, draw=linegrey] (ui) -- (0,-6.2);
+  \draw[dashed, draw=linegrey] (q) -- (5.6,-6.2);
+  \draw[dashed, draw=linegrey] (w) -- (11.2,-6.2);
+  \draw[dashed, draw=linegrey] (c) -- (16.4,-6.2);
+  \draw[flow] (0,-1.0) -- node[lbl, above]{Convert All: disable button, start thread} (11.2,-1.0);
+  \draw[flow] (11.2,-1.8) -- node[lbl, above]{one request per page} (16.4,-1.8);
+  \draw[flow] (16.4,-2.6) -- node[lbl, above]{\code{progress\_callback(done, total)}} (11.2,-2.6);
+  \draw[flow] (11.2,-3.4) -- node[lbl, above]{\code{put((...))}, never touches a widget} (5.6,-3.4);
+  \draw[dflow] (0,-4.2) -- node[lbl, above]{\code{root.after(100, ...)} polls, drains with \code{get\_nowait()}} (5.6,-4.2);
+  \draw[dflow] (5.6,-5.0) -- node[lbl, above]{messages} (0,-5.0);
+  \node[lbl, anchor=west] at (0.2,-5.7) {only the main thread redraws the queue and the progress bar};
+\end{tikzpicture}}
+\caption{The queue gets its own lifeline because no arrow ever runs from the worker
+straight to a widget. Every fact reaches the display through the queue.}
+\end{figure}
+
+Five message types flow through it: \code{file\_start}, \code{page\_progress},
+\code{file\_done}, \code{file\_error} and \code{all\_done}. Each file is wrapped in its
+own exception handler in the worker, so one bad PDF fails its own row and the batch
+continues.
+
+\section{Smaller decisions that show care}
+
+\begin{itemize}
+  \item \textbf{Atomic writes.} Output goes to \file{name\_tts.mp3.part} and is renamed
+        into place with \code{os.replace} only on success, with a \code{try/finally}
+        cleaning up. A conversion interrupted at page 7 of 20 leaves no half-file
+        masquerading as a finished audiobook.
+  \item \textbf{Graceful degradation.} \code{tkinterdnd2} is imported in a
+        \code{try/except}. If it is missing, drag and drop is skipped, the window's
+        subtitle says so plainly, and the app runs on through the file dialog.
+  \item \textbf{No fake controls.} gTTS has no volume parameter, so there is no volume
+        slider. The README says why. A dummy slider would have been easier and worse.
+  \item \textbf{Honest failure from \code{play\_audio}.} It searches for \code{ffplay},
+        \code{mpv}, \code{afplay} and \code{aplay} in order and returns a boolean, so the
+        GUI can say ``no player found, here is the path'' instead of doing nothing. The
+        README records that an early draft failed silently here.
+  \item \textbf{\code{page.extract\_text() or ""}.} PyPDF2 returns \code{None} for a page
+        it cannot read, which would crash the join. One idiom turns a crash into a blank
+        page, and an all-blank range raises a clear error rather than writing an empty
+        mp3.
+  \item \textbf{Exact dependency pins} (\code{PyPDF2==3.0.1}, \code{gTTS==2.5.4},
+        \code{tkinterdnd2==0.6.2}), which is the correct choice for an application.
+\end{itemize}
+
+\section{What was verified by running it}
+\label{sec:ver}
+
+These claims were not taken from the README on trust. They were re-checked by executing
+the code against a generated 3-page PDF and a text-free PDF.
+
+\begin{center}
+\begin{tabular}{@{}p{5.4cm}p{9.2cm}@{}}
+\toprule
+\textbf{Claim} & \textbf{Result} \\
+\midrule
+Page-range extraction & Pages 2 to 3 returned exactly those pages, inclusive at both ends. \\
+Empty-document handling & Raised the expected \code{ValueError}; no empty mp3 written. \\
+Full conversion & Succeeded; progress fired 1/3, 2/3, 3/3. \\
+\textbf{mp3 concatenation} & \code{file} reports a valid \code{MPEG ADTS, layer III} stream, and \code{ffmpeg} decoded the whole thing to WAV with no errors. The claim holds. \\
+\textbf{Page range is real} & 3 pages produced \textbf{9.744 s} of audio; pages 2 to 3 produced \textbf{6.576 s}. An exact 3:2 ratio, 3.248 s per page, which is strong evidence the joins drop and duplicate nothing. \\
+Player discovery & Found \code{ffplay} first, matching the intended order. \\
+GUI freeze bug & Reproduced against a real Tk window. See below. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{tkinterdnd2} was not installed on the verifying machine, so the drag-and-drop path
+was not exercised; the documented fallback path is the one that ran.
+
+\section{Honest findings}
+
+\begin{honest}{The one serious bug: the interface can be permanently frozen by an ordinary click}
+Pressing \textbf{Clear Queue} or \textbf{Remove Selected} while a conversion is running
+bricks the window until restart. This was reproduced by running the real code, not
+inferred.
+
+\code{start\_conversion} disables only the Convert All button; the queue-editing buttons
+stay live. Queue messages carry a \emph{list position} as the item's identity, and
+clearing the queue invalidates every position in flight. The next poll raises
+\code{IndexError}. The polling function's only \code{except} catches \code{queue.Empty},
+so the error escapes, and execution never reaches the final line that re-arms the timer
+via \code{root.after}. The self-rescheduling chain breaks and never restarts.
+
+Observed: the \code{IndexError} fires, the queue never drains again, and Convert All
+stays \code{disabled} even after \code{all\_done} is posted, because nothing is alive to
+read it. The worker thread meanwhile finishes and writes its mp3s successfully, which the
+user cannot learn from the frozen interface.
+
+Either fix suffices: disable the queue-editing buttons during conversion, as Convert All
+already is; or give messages a stable identity (the file path) instead of a list
+position.
+\end{honest}
+
+\begin{honest}{The rest, worst first}
+\begin{itemize}
+  \item \textbf{An inverted or out-of-range page range blames the document.} Verified:
+        requesting pages 3 to 1, or page 99 of a 3-page file, produces ``No extractable
+        text found ... for the selected page range''. The document is full of text; the
+        range is the problem. A user could conclude their PDF was a scan. The GUI escapes
+        this only because its Save Page Range applies \code{min}/\code{max}; the CLI is
+        fully exposed.
+  \item \textbf{The CLI prints raw tracebacks at users.} Verified for a missing file and
+        a bad range. A traceback is a developer's diagnostic, not a user message.
+  \item \textbf{Silent overwrite.} The output filename derives only from the PDF's name,
+        so converting pages 1 to 5 and then 6 to 10 of one file overwrites the first
+        result without warning. For a tool whose headline feature is page ranges, that is
+        a sharp edge.
+  \item \textbf{Progress labels mislead on a range.} ``Converting page N/M'' counts
+        positions within the selected range, so pages 5 to 7 display ``page 1/3''.
+  \item \textbf{\code{QueueItem} swallows every exception,} reducing encrypted, corrupt
+        and non-PDF files to an indistinguishable \code{?} with the real error discarded.
+  \item \textbf{Language and accent are independent dropdowns,} so most of the 80
+        offered combinations (Japanese with an Irish accent) are meaningless, and the
+        accent list contains a duplicate: ``Default (.com)'' and ``US (.com)'' are the
+        same value.
+  \item \textbf{No automated tests.} There is no test directory. Every check above was
+        written for this document and discarded. The clean module split means a pytest
+        suite over \file{converter.py} would be easy; its absence is a choice, not an
+        obstacle. The README lists this itself.
+  \item \textbf{Offline it does nothing.} Correctly and prominently documented, but still
+        the largest functional limit.
+\end{itemize}
+\end{honest}
+
+\begin{keyidea}{The fair verdict}
+The engineering instincts here are better than the project's size suggests: the one-way
+module split, the atomic rename, the queue-based thread communication, the boolean-
+returning player search, and the refusal to ship a fake volume slider are all decisions a
+careful engineer makes deliberately. The README is unusually honest, including about
+things this review independently confirmed.
+
+The weaknesses cluster in one place: the seam between the GUI's data model and the worker
+thread, where list positions are used as identities and only one of several dangerous
+buttons is disabled during a conversion. That is where the only severe bug lives, and it
+is a contained fix rather than a design flaw. Everything else on the list is polish.
+\end{keyidea}
+
+\section{Glossary}
+
+\begin{description}[leftmargin=0pt, style=nextline]
+  \item[Atomic rename] A filesystem operation that either completes fully or not at all,
+        with no visible in-between state. Used here so a partial audiobook never appears
+        under the final filename.
+  \item[Callback] A function handed to another function so it can call back while
+        working. Here the converter calls \code{progress\_callback} with a done count
+        and a total after each page.
+  \item[Daemon thread] A background thread that does not keep the program alive when the
+        main window closes.
+  \item[Event loop] The loop a GUI sits in, waiting for clicks and redrawing. While your
+        code runs inside it, nothing redraws, which is why slow work must go elsewhere.
+  \item[Graceful degradation] Losing an optional feature cleanly instead of crashing when
+        something is unavailable.
+  \item[mp3 frame] The unit an mp3 is built from. Each carries its own header, which is
+        why concatenated mp3 streams still decode.
+  \item[OCR] Optical Character Recognition: reading text out of a picture. This project
+        has none, so scanned PDFs yield nothing.
+  \item[\code{queue.Queue}] A container designed for safe hand-off between threads. The
+        standard answer to inter-thread communication in Python.
+  \item[Thread] A second line of execution inside one program, running concurrently.
+  \item[TLD] Top-level domain, the end of a web address. gTTS uses it to pick a regional
+        Google endpoint, which is how the ``accent'' setting works.
+  \item[TTS] Text to Speech. Here it is a network service, not a local engine.
+\end{description}
+
+\end{document}
